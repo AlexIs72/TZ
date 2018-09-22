@@ -1,0 +1,163 @@
+﻿@*
+    For more information on enabling MVC for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
+*@
+@{
+
+}
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+
+<script type="text/javascript">
+    var langs_array = JSON.parse('@Html.Raw(Json.Serialize(ViewBag.langs))');
+
+    $.ajax({
+        type: "GET",
+        url: "https://translate.yandex.net/api/v1.5/tr.json/getLangs",
+        data: {
+            key: "trnsl.1.1.20180919T093933Z.77cb9316ab878efb.a4769616bb58aa0cdd95c6e30e6fb479fcbe1e34",
+            ui: "ru",
+        },
+        success: function (data) {
+        },
+        error: function (data) {
+            $('#do_translate').attr("disabled", true);
+            $('#err_text').text("Сервис Yandex.Translate недоступен")
+        }
+    });
+
+
+    function selected_index_changed(value) {
+        var select = document.getElementById("dst_langs")
+        select.options.length = 0
+
+        for (var i = 0; i < langs_array.length; i++) {
+            if ((value == "en" && langs_array[i].id == "sl") ||
+                (value == "sl" && langs_array[i].id == "en") ||
+                (value == "ru" && langs_array[i].id == "ru")) {
+                continue;
+            }
+            select.options[select.options.length] = new Option(langs_array[i].title, langs_array[i].id)
+        }
+
+    }
+</script>
+
+
+<div>
+    <div style="text-align:center; width:100%">
+        <h1>Система автоматизированного перевода</h1>
+    </div>
+    <div style="text-align:center; width:100%">
+        <span id="err_text" style="width: 100%; color: red; font-weight: bold" ></span>
+    </div>
+    <div style="text-align: center; width: 100%;">
+        <div style="width: 50%; margin: auto;">
+            <div style="width: 50%; float: left; font-weight: bold;">
+                Исходный текст
+            </div>
+            <div style="width: 50%; float: left; font-weight: bold;">
+                Перевод
+            </div>
+            <div style="width: 50%; float: left; ">
+                @Html.ListBox("langs", new SelectList(ViewBag.langs, "ID", "Title"), new { id = "src_langs", onchange = "selected_index_changed(this.value)" })
+            </div>
+            <div style="width: 50%; float: left; ">
+                <select id="dst_langs" size="4">
+                    <option value="0">None</option>
+                </select>
+            </div>
+            <div style="width: 100%; float: left; margin-top: 5px;">
+                <textarea id="src_text" style="width: 100%" Rows="5">Исходный текст</textarea>
+            </div>
+            <div style="width: 50%; float: left;  text-align: left; margin-top: 5px; ">
+                <input type="button" value="Перевести" style="margin-left:40px;" id="do_translate" />
+            </div>
+            <div style="width: 49%; float: left; text-align: right;  margin-top: 5px;">
+                <input type="button" value="Экспорт в XML" style="margin-right:40px;" id="do_export" disabled />
+            </div>
+            <div style="width: 100%; float: left;  margin-top: 5px;">
+                <textarea id="dst_text" style="width: 100%" Rows="5" readonly>Перевод</textarea>
+            </div>
+        </div>
+    </div>
+</div>
+<script type="text/javascript">
+    $('#do_export').click(function () {
+        var src_text = $('#src_text').val();
+        var dst_text = $('#dst_text').val();
+        var src_lang = $('#src_langs option:selected').attr('value');
+        var dst_lang = $('#dst_langs option:selected').attr('value');
+        var getUrl = '@Url.Action("DownloadXml", "Translator")';
+
+        $.ajax({
+            type: 'POST',
+            url: "@Url.Action("GenerateXml", "Translator")", 
+            data: JSON.stringify(
+                {
+                    src_text: src_text,
+                    dst_text: dst_text,
+                    src_lang: src_lang,
+                    dst_lang: dst_lang
+                }
+            ),
+//            processData: false,
+            contentType: 'application/json; charset=utf-8',
+            success: function () {
+                window.location = getUrl;
+            },
+            error: function () {
+            }
+        });
+
+    });
+
+    $('#do_translate').click(function () {
+        var src_text = $('#src_text').val();
+
+        var src_lang = $('#src_langs option:selected').attr('value'); 
+        var dst_lang = $('#dst_langs option:selected').attr('value'); 
+
+        if (!src_lang) {
+            alert("Пожалуйста, выберите исходный язык");
+            return;
+        }
+
+        if (!dst_lang) {
+            alert("Пожалуйста, выберите целевой язык");
+            return;
+        }
+
+        if (src_lang != dst_lang) {
+            // trnsl.1.1.20180919T093933Z.77cb9316ab878efb.a4769616bb58aa0cdd95c6e30e6fb479fcbe1e34
+            //https://translate.yandex.net/api/v1.5/tr.json/translate?key=trnsl.1.1.20180919T093933Z.77cb9316ab878efb.a4769616bb58aa0cdd95c6e30e6fb479fcbe1e34&text=кошка&lang=ru-sl
+            //dst_text = "Translated"
+
+            $.ajax({
+                type: "GET",
+                url: "https://translate.yandex.net/api/v1.5/tr.json/translate",
+                data: {
+                    key: "trnsl.1.1.20180919T093933Z.77cb9316ab878efb.a4769616bb58aa0cdd95c6e30e6fb479fcbe1e34",
+                    text: src_text,
+                    lang: src_lang + "-" + dst_lang
+                },
+                success: function (data) {
+
+                    if (data.code == 200) {
+                        $('#do_export').attr("disabled", false);
+                        $('#dst_text').val(data.text[0])
+                    }
+                },
+                error: function (data) {
+                    $('#err_text').text(data.responseJSON.message)
+                }/*,
+                complete: function (data) {
+                    alert("complete" + data);
+                }*/
+            });
+
+        } else {
+            $('#dst_text').val(src_text)
+        }
+    })
+
+</script>
