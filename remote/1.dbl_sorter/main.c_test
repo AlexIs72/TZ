@@ -1,0 +1,193 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+#include <math.h>
+#include <sys/mman.h>
+
+int usage(const char *prg, int exit_code) {
+	printf("Usage: %s <input_file> <out_file>\n", prg);
+	return exit_code;
+}
+
+uint32_t reorganize_input_data(FILE *in, int out);
+double* sort_data(const char *label, double *buf_in, double *buf_out, size_t left, size_t right);
+
+int main(int argc, char *argv[]) {
+    const char *tmp_file = "input_data_raw";
+    const char *buf_file = "data_buf";
+    uint32_t total_count = 0/*, portion, index*/;
+    FILE *f_in, *f_out;
+    int fd_tmp, fd_buf;
+    struct stat st;
+    
+
+	if(argc < 3) {
+		return usage(argv[0], -1);
+	}
+
+    if (stat(argv[1], &st) == -1) {
+        printf("File is not exists: %s\n", argv[1]);
+        return usage(argv[0], -1);
+    }
+
+    f_in = fopen(argv[1], "r");
+
+    if(!f_in) {
+        printf("Unable to open input file (%s) for reading: %s\n", argv[1], strerror(errno));
+        return usage(argv[0], -1);
+    }
+
+    fd_tmp = open(tmp_file, O_RDWR|O_CREAT|O_TRUNC);
+    if(fd_tmp < 0) {
+        printf("Unable to open output file (%s) for writing: %s\n", tmp_file, strerror(errno));
+        return -1;
+    }
+    fchmod(fd_tmp, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+
+    fd_buf = open(buf_file, O_RDWR|O_CREAT|O_TRUNC);                                                            
+    if(fd_buf < 0) {                                                                                            
+        printf("Unable to open output file (%s) for writing: %s\n", buf_file, strerror(errno));                 
+        return -1;                                                                                              
+    }                                                                                                           
+    fchmod(fd_buf, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    
+
+    f_out = fopen(argv[2], "w");
+    if(!f_out) {        
+        printf("Unable to open output file (%s) for reading: %s\n", argv[2], strerror(errno));
+        return usage(argv[0], -1);
+    }
+
+    printf("reorganize data ... \n");
+
+    total_count = reorganize_input_data(f_in, fd_tmp);
+    
+    printf("total = %u\n", total_count);
+
+    
+    if(total_count > 0) {
+        size_t i;
+        size_t data_size = total_count * sizeof(double);
+        double *buf_data = NULL;
+        double *in_data = (double*)mmap(NULL, data_size, PROT_READ|PROT_WRITE,
+                                        MAP_SHARED, fd_tmp, 0);
+        if(in_data == MAP_FAILED) {
+            printf("Unable to map input file: %s\n", strerror(errno));                                                     
+            return -1;
+        }
+
+        buf_data = (double*)mmap(NULL, data_size, PROT_READ|PROT_WRITE,
+                                    MAP_SHARED, fd_buf, 0);
+
+        if(buf_data == MAP_FAILED) {
+            printf("Unable to map buf file: %s\n", strerror(errno));
+            return -1;
+        }
+
+        ftruncate(fd_buf, data_size);
+        lseek(fd_buf, SEEK_SET, 0);
+
+        printf("sorting ...\n");
+        sort_data("full", in_data, buf_data, 0, total_count);    
+       
+                                                                                                         
+        printf("write result ...\n");
+        for(i=0; i<total_count; i++) {                                                                                
+            fprintf(f_out, "%1.15e\n", buf_data[i]);                                                                         
+        }                                                                                                       
+
+
+        munmap(in_data, data_size);
+        munmap(buf_data, data_size);
+    }
+
+    close(fd_buf);
+    close(fd_tmp);
+    fclose(f_in);
+    fclose(f_out);    
+
+	unlink(tmp_file);
+	unlink(buf_file);
+
+	return 0;
+}
+
+uint32_t reorganize_input_data(FILE *in, int out) {
+    double tmp_dbl;
+    uint32_t total = 0;
+
+    (void)sizeof(out);
+
+    while(!feof(in)) {
+        if(fscanf(in, "%lfu", &tmp_dbl) > 0) {
+            if(!isnan(tmp_dbl)) {
+                write(out, &tmp_dbl, sizeof(double));
+                total++;
+            } 
+        } 
+    }
+
+    lseek(out, SEEK_SET, 0);    
+    return total;
+}
+
+/*
+
+https://ru.wikipedia.org/wiki/Сортировка_слиянием
+
+*/
+
+double* sort_data(const char *label, double *buf_in, double *buf_out, size_t left, size_t right) {
+    size_t i, l_curr, r_curr;
+    double *target = NULL;
+    double *left_buf, *right_buf;
+    size_t middle = (right+left)/2;
+	size_t size = right-left;
+
+printf("[%s] merge data from %lu to %lu; size = %lu; (fd_buf_in = %p; fd_buf_out = %p)\n", label, left, right, size, buf_in, buf_out);
+
+    if(left == right) {
+        buf_out[left] = buf_in[left];
+printf("===> [%s] return from %lu to %lu\n", label, left, right);
+        return buf_out;
+    }
+
+    left_buf = sort_data("left", buf_in, buf_out, left, middle);
+    right_buf = sort_data("right", buf_in, buf_out, middle+1, right);
+
+    target = (left_buf == buf_in ? buf_out : buf_in);
+
+printf("===> [%s] start for %lu to %lu (fd_left = %p; fd_right = %p; target = %p)\n", label, left, right, left_buf, right_buf, target);
+    l_curr = left, r_curr = middle + 1;
+    for (i = left; i <= right; i++) {
+printf("i = %lu; l_curr = %lu; r_curr = %lu; middle = %lu; left_buf[l_curr] = %1.15e; right_buf[r_curr] = %1.15e; ", i, l_curr, r_curr, middle, left_buf[l_curr], right_buf[r_curr]);
+        if (l_curr <= middle && r_curr <= right) {
+            if (left_buf[l_curr] < right_buf[r_curr]) {
+                target[i] = left_buf[l_curr];
+                l_curr++;
+            } else {
+                target[i] = right_buf[r_curr];
+                r_curr++;
+            }
+        } else if (l_curr <= middle) {
+            target[i] = left_buf[l_curr];
+            l_curr++;
+        } else {
+            target[i] = right_buf[r_curr];
+            r_curr++;
+        }
+printf(" target[i] = %1.15e\n", target[i]);
+    }
+
+printf("===> [%s] return from %lu to %lu\n", label, left, right);
+    return target;
+}
+
