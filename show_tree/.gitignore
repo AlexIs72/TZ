@@ -1,0 +1,6 @@
+*.o
+*.d
+show_tree
+*.json
+*.bin
+
